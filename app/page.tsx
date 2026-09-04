@@ -275,7 +275,7 @@ export default function Home() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 pr-24">
             <span className="hidden text-right sm:block">
               <b className="block text-xs">{data.viewer.name}</b>
               <small className="text-[10px] text-muted-foreground">

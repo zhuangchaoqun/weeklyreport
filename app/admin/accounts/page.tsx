@@ -111,7 +111,7 @@ export default function AccountsPage() {
             <ArrowLeft className="size-4" />
             返回周报
           </Link>
-          <div className="flex items-center gap-2 font-bold text-[#0b3768]">
+          <div className="mr-24 flex items-center gap-2 font-bold text-[#0b3768]">
             <ShieldCheck className="size-5 text-[#68a82b]" />
             管理员 · 账号审核
           </div>
