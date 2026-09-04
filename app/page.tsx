@@ -50,6 +50,7 @@ type ReportData = {
   viewer: PublicUser;
   student: PublicUser | null;
   students: PublicUser[];
+  studentSubmissionStatuses: Record<string, 'submitted' | 'not_submitted'>;
   weeks: AcademicWeek[];
   week: AcademicWeek;
   editable: boolean;
@@ -516,6 +517,9 @@ export default function Home() {
               <p className="mt-7 px-3 text-[11px] font-bold uppercase tracking-[.14em] text-muted-foreground">
                 查看学生
               </p>
+              <p className="mt-1 px-3 text-[10px] text-muted-foreground">
+                绿色：已提交 · 红色：未提交
+              </p>
               <div className="mt-3 space-y-1">
                 {data.students.map((student) => (
                   <button
@@ -523,7 +527,31 @@ export default function Home() {
                     onClick={() => void load(data.week.start, student.id)}
                     className={`w-full rounded-xl px-3 py-2 text-left text-sm ${student.id === data.student?.id ? 'bg-[#eaf3e2] font-semibold text-[#376d1b]' : 'hover:bg-muted'}`}
                   >
-                    {student.name}
+                    <span className="flex items-center justify-between gap-2">
+                      <span>{student.name}</span>
+                      <span
+                        className={`inline-flex shrink-0 items-center gap-1 text-[10px] font-semibold ${
+                          data.studentSubmissionStatuses[student.id] ===
+                          'submitted'
+                            ? 'text-[#39751f]'
+                            : 'text-[#b42318]'
+                        }`}
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={`size-2 rounded-full ${
+                            data.studentSubmissionStatuses[student.id] ===
+                            'submitted'
+                              ? 'bg-[#64a832]'
+                              : 'bg-[#d6453d]'
+                          }`}
+                        />
+                        {data.studentSubmissionStatuses[student.id] ===
+                        'submitted'
+                          ? '已提交'
+                          : '未提交'}
+                      </span>
+                    </span>
                     <span className="block text-[10px] font-normal text-muted-foreground">
                       {student.studentId}
                     </span>

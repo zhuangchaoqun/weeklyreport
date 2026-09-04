@@ -68,6 +68,9 @@ const translations: Record<string, string> = {
   退出登录: 'Sign out',
   自然周档案: 'Weekly archive',
   查看学生: 'Students',
+  '绿色：已提交 · 红色：未提交': 'Green: submitted · Red: not submitted',
+  已提交: 'Submitted',
+  未提交: 'Not submitted',
   每周汇报: 'Weekly Report',
   '学生可持续保存草稿；提交后锁定，只有导师退回后才能继续修改。':
     'You may save drafts at any time. A submitted report is locked until your supervisor returns it.',
@@ -234,7 +237,7 @@ function applyLanguage(language: Language) {
     node = walker.nextNode();
   }
   for (const element of document.body.querySelectorAll(
-    '[placeholder],[aria-label],[title]',
+    '[placeholder],[aria-label],[title],[data-placeholder]',
   )) {
     if (element.closest('[data-i18n-ignore]')) continue;
     let attributes = originalAttributes.get(element);
@@ -247,7 +250,12 @@ function applyLanguage(language: Language) {
       applied = new Map();
       appliedAttributes.set(element, applied);
     }
-    for (const name of ['placeholder', 'aria-label', 'title']) {
+    for (const name of [
+      'placeholder',
+      'aria-label',
+      'title',
+      'data-placeholder',
+    ]) {
       const current = element.getAttribute(name);
       const previous = applied.get(name);
       if (
@@ -287,7 +295,12 @@ export function LanguageSwitcher() {
       subtree: true,
       characterData: true,
       attributes: true,
-      attributeFilter: ['placeholder', 'aria-label', 'title'],
+      attributeFilter: [
+        'placeholder',
+        'aria-label',
+        'title',
+        'data-placeholder',
+      ],
     });
     return () => observer.disconnect();
   }, [language]);
