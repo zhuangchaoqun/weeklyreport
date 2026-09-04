@@ -1,7 +1,13 @@
-"use client";
+'use client';
 
-import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ClipboardEvent as ReactClipboardEvent,
+} from 'react';
+import Link from 'next/link';
 import {
   BookOpen,
   CalendarDays,
@@ -22,14 +28,14 @@ import {
   UploadCloud,
   Users,
   type LucideIcon,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Progress, ProgressLabel } from "@/components/ui/progress";
-import { Textarea } from "@/components/ui/textarea";
-import { displayDate, type AcademicWeek } from "@/lib/academic-calendar";
-import { withBasePath } from "@/lib/base-path";
-import { reportSections, type ReportSectionId } from "@/lib/report-definitions";
-import type { PublicUser } from "@/lib/db";
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Progress, ProgressLabel } from '@/components/ui/progress';
+import { Textarea } from '@/components/ui/textarea';
+import { displayDate, type AcademicWeek } from '@/lib/academic-calendar';
+import { withBasePath } from '@/lib/base-path';
+import { reportSections, type ReportSectionId } from '@/lib/report-definitions';
+import type { PublicUser } from '@/lib/db';
 
 type Attachment = {
   id: string;
@@ -60,26 +66,207 @@ type ReportData = {
   attachments: Attachment[];
 };
 
-const icons: Record<Exclude<ReportSectionId, "summary">, LucideIcon> = {
+const icons: Record<Exclude<ReportSectionId, 'summary'>, LucideIcon> = {
   experiment: Microscope,
   blockers: CircleHelp,
   other: Paperclip,
   next: CalendarDays,
 };
 const textSections = reportSections.filter(
-  (section) => section.id !== "summary",
+  (section) => section.id !== 'summary',
 );
 const emptyValues = () =>
   Object.fromEntries(
-    reportSections.map((section) => [section.id, ""]),
+    reportSections.map((section) => [section.id, '']),
   ) as Record<ReportSectionId, string>;
 const newRow = (): WorkRow => ({
   id: globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2),
-  plan: "",
-  completion: "",
-  remark: "",
+  plan: '',
+  completion: '',
+  remark: '',
 });
 const initialRows = () => [newRow(), newRow(), newRow()];
+const RICH_PREFIX = '<!--weekly-rich-->';
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
+    .replaceAll('\n', '<br>');
+}
+
+function sanitizeRichHtml(source: string) {
+  const input = new DOMParser().parseFromString(source, 'text/html');
+  const output = document.implementation.createHTMLDocument('');
+  const allowed = new Set([
+    'P',
+    'DIV',
+    'BR',
+    'B',
+    'STRONG',
+    'I',
+    'EM',
+    'U',
+    'S',
+    'STRIKE',
+    'SUB',
+    'SUP',
+    'UL',
+    'OL',
+    'LI',
+    'TABLE',
+    'THEAD',
+    'TBODY',
+    'TFOOT',
+    'TR',
+    'TD',
+    'TH',
+    'H1',
+    'H2',
+    'H3',
+    'H4',
+  ]);
+
+  function appendClean(node: Node, parent: Node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      parent.appendChild(output.createTextNode(node.textContent ?? ''));
+      return;
+    }
+    if (!(node instanceof HTMLElement)) return;
+
+    const tag = allowed.has(node.tagName)
+      ? node.tagName.toLowerCase()
+      : node.tagName === 'SPAN' || node.tagName === 'FONT'
+        ? 'span'
+        : null;
+    const target = tag ? output.createElement(tag) : parent;
+    if (target !== parent) {
+      if (node instanceof HTMLTableCellElement) {
+        const colSpan = Math.min(Math.max(node.colSpan, 1), 20);
+        const rowSpan = Math.min(Math.max(node.rowSpan, 1), 50);
+        if (colSpan > 1)
+          (target as HTMLElement).setAttribute('colspan', String(colSpan));
+        if (rowSpan > 1)
+          (target as HTMLElement).setAttribute('rowspan', String(rowSpan));
+      }
+      const styles: string[] = [];
+      const align = node.style.textAlign;
+      if (['left', 'center', 'right', 'justify'].includes(align))
+        styles.push(`text-align:${align}`);
+      if (/^(bold|[6-9]00)$/.test(node.style.fontWeight))
+        styles.push('font-weight:bold');
+      if (node.style.fontStyle === 'italic') styles.push('font-style:italic');
+      if (node.style.textDecorationLine.includes('underline'))
+        styles.push('text-decoration:underline');
+      if (styles.length)
+        (target as HTMLElement).setAttribute('style', styles.join(';'));
+      parent.appendChild(target);
+    }
+    for (const child of Array.from(node.childNodes)) appendClean(child, target);
+  }
+
+  for (const child of Array.from(input.body.childNodes))
+    appendClean(child, output.body);
+  return output.body.innerHTML;
+}
+
+function editorHtmlFromValue(value: string) {
+  return value.startsWith(RICH_PREFIX)
+    ? sanitizeRichHtml(value.slice(RICH_PREFIX.length))
+    : escapeHtml(value);
+}
+
+function valueFromEditorHtml(html: string) {
+  const clean = sanitizeRichHtml(html);
+  const probe = document.createElement('div');
+  probe.innerHTML = clean;
+  return probe.textContent?.trim() ? `${RICH_PREFIX}${clean}` : '';
+}
+
+function insertHtmlAtSelection(container: HTMLElement, html: string) {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount || !container.contains(selection.anchorNode)) {
+    container.insertAdjacentHTML('beforeend', html);
+    return;
+  }
+  const range = selection.getRangeAt(0);
+  range.deleteContents();
+  const fragment = range.createContextualFragment(html);
+  const last = fragment.lastChild;
+  range.insertNode(fragment);
+  if (last) {
+    range.setStartAfter(last);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+}
+
+function parseWorkRowsFromClipboard(data: DataTransfer): WorkRow[] | null {
+  const html = data.getData('text/html');
+  const plain = data.getData('text/plain');
+  let sourceRows: Array<{ text: string[]; html: string[] }> = [];
+
+  if (html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const table = doc.querySelector('table');
+    if (table) {
+      sourceRows = Array.from(table.rows).map((row) => {
+        const cells = Array.from(row.cells);
+        return {
+          text: cells.map((cell) =>
+            (cell.textContent ?? '').replace(/\s+/g, ' ').trim(),
+          ),
+          html: cells.map((cell) => cell.innerHTML),
+        };
+      });
+    }
+  }
+  if (!sourceRows.length && plain.includes('\t')) {
+    sourceRows = plain
+      .split(/\r?\n/)
+      .filter((line) => line.trim())
+      .map((line) => {
+        const cells = line.split('\t');
+        return {
+          text: cells.map((cell) => cell.trim()),
+          html: cells.map(escapeHtml),
+        };
+      });
+  }
+  if (
+    !sourceRows.length ||
+    Math.max(...sourceRows.map((row) => row.text.length)) < 3
+  )
+    return null;
+
+  const headerText = sourceRows[0].text.join('|').toLowerCase();
+  if (
+    /(上周计划|完成情况|备注)/.test(headerText) ||
+    /(previous plan|progress|notes?)/.test(headerText)
+  )
+    sourceRows = sourceRows.slice(1);
+
+  const hasIndex =
+    sourceRows.some((row) => row.text.length >= 4) &&
+    sourceRows
+      .filter((row) => row.text.some(Boolean))
+      .every((row) => /^\d+[.、)]?$/.test(row.text[0] ?? ''));
+  const offset = hasIndex ? 1 : 0;
+  const parsed = sourceRows
+    .filter((row) => row.text.some(Boolean))
+    .slice(0, 30)
+    .map((row) => ({
+      id: newRow().id,
+      plan: valueFromEditorHtml(row.html[offset] ?? ''),
+      completion: valueFromEditorHtml(row.html[offset + 1] ?? ''),
+      remark: valueFromEditorHtml(row.html[offset + 2] ?? ''),
+    }));
+  return parsed.length ? parsed : null;
+}
 
 function parseRows(raw: string): WorkRow[] {
   if (!raw.trim()) return initialRows();
@@ -87,14 +274,14 @@ function parseRows(raw: string): WorkRow[] {
     const parsed = JSON.parse(raw) as unknown;
     if (Array.isArray(parsed)) {
       const rows = parsed.slice(0, 30).map((item) => {
-        const row = (item && typeof item === "object" ? item : {}) as Record<
+        const row = (item && typeof item === 'object' ? item : {}) as Record<
           string,
           unknown
         >;
         const text = (value: unknown) =>
-          typeof value === "string" ? value : "";
+          typeof value === 'string' ? value : '';
         return {
-          id: typeof row.id === "string" ? row.id : newRow().id,
+          id: typeof row.id === 'string' ? row.id : newRow().id,
           plan: text(row.plan),
           completion: text(row.completion),
           remark: text(row.remark),
@@ -107,7 +294,7 @@ function parseRows(raw: string): WorkRow[] {
 }
 
 function compactDate(value: string) {
-  const [, month, day] = value.split("-");
+  const [, month, day] = value.split('-');
   return `${Number(month)}.${Number(day)}`;
 }
 
@@ -118,30 +305,30 @@ export default function Home() {
     [comments, setComments] = useState(emptyValues),
     [loading, setLoading] = useState(true),
     [saving, setSaving] = useState(false),
-    [message, setMessage] = useState(""),
-    [returnNote, setReturnNote] = useState(""),
-    [error, setError] = useState("");
+    [message, setMessage] = useState(''),
+    [returnNote, setReturnNote] = useState(''),
+    [error, setError] = useState('');
 
   async function load(periodStart?: string, studentId?: string) {
     setLoading(true);
-    setError("");
+    setError('');
     const params = new URLSearchParams();
-    if (periodStart) params.set("periodStart", periodStart);
-    if (studentId) params.set("studentId", studentId);
+    if (periodStart) params.set('periodStart', periodStart);
+    if (studentId) params.set('studentId', studentId);
     const response = await fetch(
-      withBasePath(`/api/reports/current${params.size ? `?${params}` : ""}`),
+      withBasePath(`/api/reports/current${params.size ? `?${params}` : ''}`),
     );
     const result = (await response.json()) as ReportData & { error?: string };
     setLoading(false);
     if (!response.ok) {
-      setError(result.error ?? "读取周报失败。");
+      setError(result.error ?? '读取周报失败。');
       return;
     }
     setData(result);
     setValues({ ...emptyValues(), ...result.sections });
-    setWorkRows(parseRows(result.sections.summary ?? ""));
+    setWorkRows(parseRows(result.sections.summary ?? ''));
     setComments({ ...emptyValues(), ...result.comments });
-    setReturnNote(result.report?.returnNote ?? "");
+    setReturnNote(result.report?.returnNote ?? '');
   }
   useEffect(() => {
     void load();
@@ -153,22 +340,22 @@ export default function Home() {
   const completion = useMemo(() => {
     const required = reportSections.filter((section) => section.required);
     const done = required.filter((section) =>
-      section.id === "summary" ? overviewComplete : values[section.id].trim(),
+      section.id === 'summary' ? overviewComplete : values[section.id].trim(),
     ).length;
     return Math.round((done / required.length) * 100);
   }, [overviewComplete, values]);
 
   async function save(
-    action: "save" | "submit" | "comment" | "return" = "save",
-    returnNote = "",
+    action: 'save' | 'submit' | 'comment' | 'return' = 'save',
+    returnNote = '',
   ) {
     if (!data?.student) return;
     setSaving(true);
-    setError("");
+    setError('');
     const sections = { ...values, summary: JSON.stringify(workRows) };
-    const response = await fetch(withBasePath("/api/reports/current"), {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
+    const response = await fetch(withBasePath('/api/reports/current'), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         periodStart: data.week.start,
         studentId: data.student.id,
@@ -184,49 +371,49 @@ export default function Home() {
     };
     setSaving(false);
     if (!response.ok) {
-      setError(result.error ?? "保存失败。");
+      setError(result.error ?? '保存失败。');
       return;
     }
     if (result.emailWarning) setError(result.emailWarning);
     setMessage(
-      data.viewer.role === "admin"
-        ? action === "return"
-          ? "周报已退回学生"
-          : "导师点评已提交"
-        : action === "submit"
-          ? "周报已提交并锁定"
-          : "草稿已保存",
+      data.viewer.role === 'admin'
+        ? action === 'return'
+          ? '周报已退回学生'
+          : '导师点评已提交'
+        : action === 'submit'
+          ? '周报已提交并锁定'
+          : '草稿已保存',
     );
-    window.setTimeout(() => setMessage(""), 2400);
+    window.setTimeout(() => setMessage(''), 2400);
     await load(data.week.start, data.student.id);
   }
   async function upload(sectionKey: ReportSectionId, file: File) {
     if (!data) return;
     const form = new FormData();
-    form.set("periodStart", data.week.start);
-    form.set("sectionKey", sectionKey);
-    form.set("studentId", data.student?.id ?? "");
-    form.set("file", file);
+    form.set('periodStart', data.week.start);
+    form.set('sectionKey', sectionKey);
+    form.set('studentId', data.student?.id ?? '');
+    form.set('file', file);
     setSaving(true);
-    const response = await fetch(withBasePath("/api/reports/attachments"), {
-      method: "POST",
+    const response = await fetch(withBasePath('/api/reports/attachments'), {
+      method: 'POST',
       body: form,
     });
     const result = (await response.json()) as { error?: string };
     setSaving(false);
     if (!response.ok) {
-      setError(result.error ?? "附件上传失败。");
+      setError(result.error ?? '附件上传失败。');
       return;
     }
     await load(data.week.start, data.student?.id);
   }
   async function logout() {
-    await fetch(withBasePath("/api/auth/logout"), { method: "POST" });
-    window.location.href = withBasePath("/login");
+    await fetch(withBasePath('/api/auth/logout'), { method: 'POST' });
+    window.location.href = withBasePath('/login');
   }
   function updateRow(
     id: string,
-    key: keyof Pick<WorkRow, "plan" | "completion" | "remark">,
+    key: keyof Pick<WorkRow, 'plan' | 'completion' | 'remark'>,
     value: string,
   ) {
     setWorkRows((rows) =>
@@ -244,7 +431,7 @@ export default function Home() {
     return (
       <main className="grid min-h-screen place-items-center bg-background">
         <div className="rounded-2xl border bg-card p-6">
-          <p className="text-red-700">{error || "无法读取周报。"}</p>
+          <p className="text-red-700">{error || '无法读取周报。'}</p>
           <Link
             className="mt-4 inline-block text-sm font-semibold text-[#0b5b92]"
             href="/login"
@@ -254,7 +441,7 @@ export default function Home() {
         </div>
       </main>
     );
-  const advisor = data.viewer.role === "admin";
+  const advisor = data.viewer.role === 'admin';
 
   return (
     <main className="min-h-screen bg-background text-foreground">
@@ -262,7 +449,7 @@ export default function Home() {
         <div className="mx-auto flex h-[72px] max-w-[1450px] items-center justify-between px-5 lg:px-8">
           <div className="flex items-center gap-3">
             <img
-              src={withBasePath("/beio-mark.png")}
+              src={withBasePath('/beio-mark.png')}
               alt="BEIO Lab"
               className="h-11 w-14 object-contain"
             />
@@ -279,7 +466,7 @@ export default function Home() {
             <span className="hidden text-right sm:block">
               <b className="block text-xs">{data.viewer.name}</b>
               <small className="text-[10px] text-muted-foreground">
-                {advisor ? "导师 · 管理员" : "学生账号"}
+                {advisor ? '导师 · 管理员' : '学生账号'}
               </small>
             </span>
             {advisor && (
@@ -311,13 +498,13 @@ export default function Home() {
               <button
                 key={week.start}
                 onClick={() => void load(week.start, data.student?.id)}
-                className={`w-full shrink-0 rounded-xl px-3 py-2.5 text-left max-lg:w-40 ${week.start === data.week.start ? "bg-[#0b2f58] text-white" : "hover:bg-muted"}`}
+                className={`w-full shrink-0 rounded-xl px-3 py-2.5 text-left max-lg:w-40 ${week.start === data.week.start ? 'bg-[#0b2f58] text-white' : 'hover:bg-muted'}`}
               >
                 <span className="block text-xs font-semibold">
                   {week.year} 年 · 第 {week.week} 周
                 </span>
                 <span
-                  className={`mt-1 block text-[10px] ${week.start === data.week.start ? "text-white/65" : "text-muted-foreground"}`}
+                  className={`mt-1 block text-[10px] ${week.start === data.week.start ? 'text-white/65' : 'text-muted-foreground'}`}
                 >
                   {compactDate(week.start)}—{compactDate(week.end)}
                 </span>
@@ -334,7 +521,7 @@ export default function Home() {
                   <button
                     key={student.id}
                     onClick={() => void load(data.week.start, student.id)}
-                    className={`w-full rounded-xl px-3 py-2 text-left text-sm ${student.id === data.student?.id ? "bg-[#eaf3e2] font-semibold text-[#376d1b]" : "hover:bg-muted"}`}
+                    className={`w-full rounded-xl px-3 py-2 text-left text-sm ${student.id === data.student?.id ? 'bg-[#eaf3e2] font-semibold text-[#376d1b]' : 'hover:bg-muted'}`}
                   >
                     {student.name}
                     <span className="block text-[10px] font-normal text-muted-foreground">
@@ -358,12 +545,12 @@ export default function Home() {
                       {data.week.year} 年 · 第 {data.week.week} 周
                     </span>
                     <span>
-                      {displayDate(data.week.start)} —{" "}
+                      {displayDate(data.week.start)} —{' '}
                       {displayDate(data.week.end)}
                     </span>
                   </div>
                   <h1 className="text-[clamp(1.8rem,4vw,2.5rem)] font-bold tracking-[-.04em] text-[#0b2f58]">
-                    {advisor ? `${data.student.name}的周报` : "每周汇报"}
+                    {advisor ? `${data.student.name}的周报` : '每周汇报'}
                   </h1>
                   <p className="mt-2 text-sm text-muted-foreground">
                     学生可持续保存草稿；提交后锁定，只有导师退回后才能继续修改。
@@ -376,7 +563,7 @@ export default function Home() {
                 )}
                 {!advisor && data.report?.returnedAt && (
                   <Info icon={RotateCcw} title="导师已退回修改">
-                    {data.report.returnNote || "请根据导师点评修改后重新提交。"}
+                    {data.report.returnNote || '请根据导师点评修改后重新提交。'}
                   </Info>
                 )}
                 {error && (
@@ -397,13 +584,13 @@ export default function Home() {
                   <div className="mt-3 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
                     <span>
                       {data.report
-                        ? `状态：${data.report.status === "submitted" ? "已提交" : data.report.status === "locked" ? "已锁定" : "草稿"}`
-                        : "尚未开始"}
+                        ? `状态：${data.report.status === 'submitted' ? '已提交' : data.report.status === 'locked' ? '已锁定' : '草稿'}`
+                        : '尚未开始'}
                     </span>
                     <span>
                       {data.report?.updatedAt
-                        ? `最近保存：${new Date(data.report.updatedAt).toLocaleString("zh-CN")}`
-                        : "所有更改都会保存在服务器"}
+                        ? `最近保存：${new Date(data.report.updatedAt).toLocaleString('zh-CN')}`
+                        : '所有更改都会保存在服务器'}
                     </span>
                   </div>
                 </div>
@@ -413,7 +600,7 @@ export default function Home() {
                     rows={workRows}
                     comment={comments.summary}
                     attachments={data.attachments.filter(
-                      (item) => item.section_key === "summary",
+                      (item) => item.section_key === 'summary',
                     )}
                     editable={data.editable}
                     canUpload={data.editable || advisor}
@@ -427,10 +614,15 @@ export default function Home() {
                           : rows,
                       )
                     }
+                    onPasteRows={(rows) => {
+                      setWorkRows(rows);
+                      setMessage(`已从 Word 粘贴 ${rows.length} 行`);
+                      window.setTimeout(() => setMessage(''), 2400);
+                    }}
                     onComment={(value) =>
                       setComments((items) => ({ ...items, summary: value }))
                     }
-                    onUpload={(file) => void upload("summary", file)}
+                    onUpload={(file) => void upload('summary', file)}
                   />
                   {textSections.map((section) => (
                     <ReportSection
@@ -473,7 +665,9 @@ export default function Home() {
                       <Textarea
                         value={returnNote}
                         onChange={(event) => setReturnNote(event.target.value)}
-                        disabled={!data.report || data.report.status === "draft"}
+                        disabled={
+                          !data.report || data.report.status === 'draft'
+                        }
                         placeholder="退回说明（选填）"
                         className="mt-3 min-h-20 bg-white"
                       />
@@ -484,9 +678,9 @@ export default function Home() {
                         disabled={
                           saving ||
                           !data.report ||
-                          data.report.status === "draft"
+                          data.report.status === 'draft'
                         }
-                        onClick={() => void save("return", returnNote)}
+                        onClick={() => void save('return', returnNote)}
                         className="rounded-xl"
                       >
                         <RotateCcw />
@@ -494,15 +688,15 @@ export default function Home() {
                       </Button>
                       <Button
                         disabled={saving || !data.report}
-                        onClick={() => void save("comment")}
+                        onClick={() => void save('comment')}
                         className="rounded-xl bg-[#4f842c]"
                       >
                         <MessageSquareText />
-                        {saving ? "正在提交…" : "提交 / 更新点评"}
+                        {saving ? '正在提交…' : '提交 / 更新点评'}
                       </Button>
                     </div>
                   </div>
-                ) : data.report?.status === "submitted" ? (
+                ) : data.report?.status === 'submitted' ? (
                   <div className="mt-6 rounded-2xl bg-[#0b2f58] p-5 text-white">
                     <div className="flex items-center gap-2 font-semibold">
                       <CheckCircle2 className="size-5 text-[#91cf5e]" />
@@ -524,15 +718,15 @@ export default function Home() {
                       <Button
                         variant="outline"
                         disabled={!data.editable || saving}
-                        onClick={() => void save("save")}
+                        onClick={() => void save('save')}
                         className="rounded-xl border-white/35 bg-transparent text-white hover:bg-white/10 hover:text-white"
                       >
                         <Save />
-                        {saving ? "正在保存…" : "保存草稿"}
+                        {saving ? '正在保存…' : '保存草稿'}
                       </Button>
                       <Button
                         disabled={!data.editable || saving}
-                        onClick={() => void save("submit")}
+                        onClick={() => void save('submit')}
                         className="rounded-xl bg-[#71af37]"
                       >
                         <CheckCircle2 />
@@ -566,6 +760,7 @@ function WorkOverview({
   onChange,
   onAdd,
   onDelete,
+  onPasteRows,
   onComment,
   onUpload,
 }: {
@@ -577,11 +772,12 @@ function WorkOverview({
   advisor: boolean;
   onChange: (
     id: string,
-    key: "plan" | "completion" | "remark",
+    key: 'plan' | 'completion' | 'remark',
     value: string,
   ) => void;
   onAdd: () => void;
   onDelete: (id: string) => void;
+  onPasteRows: (rows: WorkRow[]) => void;
   onComment: (value: string) => void;
   onUpload: (file: File) => void;
 }) {
@@ -595,7 +791,8 @@ function WorkOverview({
       />
       <div className="border-t px-4 pb-5 pt-4 sm:px-5">
         <p className="mb-3 text-xs leading-5 text-muted-foreground">
-          对完成情况及未完成的原因做具体说明。学生可根据任务数量自行增加或删除行。
+          对完成情况及未完成的原因做具体说明。可在任一单元格中直接粘贴整张 Word
+          表格，系统会自动填入全部行；也可手动增加或删除行。
         </p>
         <div className="overflow-x-auto rounded-xl border">
           <table className="w-full min-w-[720px] border-collapse text-sm">
@@ -622,19 +819,22 @@ function WorkOverview({
                     value={row.plan}
                     disabled={!editable}
                     placeholder="填写上周计划"
-                    onChange={(value) => onChange(row.id, "plan", value)}
+                    onChange={(value) => onChange(row.id, 'plan', value)}
+                    onPasteRows={onPasteRows}
                   />
                   <TableCell
                     value={row.completion}
                     disabled={!editable}
                     placeholder="说明完成情况或未完成原因"
-                    onChange={(value) => onChange(row.id, "completion", value)}
+                    onChange={(value) => onChange(row.id, 'completion', value)}
+                    onPasteRows={onPasteRows}
                   />
                   <TableCell
                     value={row.remark}
                     disabled={!editable}
                     placeholder="补充说明（选填）"
-                    onChange={(value) => onChange(row.id, "remark", value)}
+                    onChange={(value) => onChange(row.id, 'remark', value)}
+                    onPasteRows={onPasteRows}
                   />
                   {editable && (
                     <td className="px-2 py-3 text-center">
@@ -683,25 +883,103 @@ function WorkOverview({
   );
 }
 
+/* oxlint-disable jsx-a11y/prefer-tag-over-role */
+function RichTextEditor({
+  value,
+  disabled,
+  placeholder,
+  compact = false,
+  onChange,
+  onTablePaste,
+}: {
+  value: string;
+  disabled: boolean;
+  placeholder: string;
+  compact?: boolean;
+  onChange: (value: string) => void;
+  onTablePaste?: (rows: WorkRow[]) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const editor = ref.current;
+    if (!editor || document.activeElement === editor) return;
+    const next = editorHtmlFromValue(value);
+    if (editor.innerHTML !== next) editor.innerHTML = next;
+  }, [value]);
+
+  function commit() {
+    if (ref.current) onChange(valueFromEditorHtml(ref.current.innerHTML));
+  }
+
+  function paste(event: ReactClipboardEvent<HTMLDivElement>) {
+    if (onTablePaste) {
+      const rows = parseWorkRowsFromClipboard(event.clipboardData);
+      if (rows) {
+        event.preventDefault();
+        onTablePaste(rows);
+        return;
+      }
+    }
+    const html = event.clipboardData.getData('text/html');
+    if (!html) return;
+    event.preventDefault();
+    const clean = sanitizeRichHtml(html);
+    if (ref.current) {
+      insertHtmlAtSelection(ref.current, clean);
+      commit();
+    }
+  }
+
+  return (
+    <div
+      ref={ref}
+      role="textbox"
+      aria-label={placeholder}
+      aria-multiline="true"
+      aria-readonly={disabled}
+      contentEditable={!disabled}
+      suppressContentEditableWarning
+      data-placeholder={placeholder}
+      onInput={commit}
+      onBlur={commit}
+      onPaste={paste}
+      className={`weekly-rich-editor overflow-auto text-sm leading-6 ${
+        compact
+          ? 'min-h-[82px] rounded-none border-0 bg-transparent p-3'
+          : 'min-h-[132px] rounded-md border bg-[#fbfcfd] p-3'
+      } ${
+        disabled
+          ? 'cursor-default bg-muted/20'
+          : 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50'
+      }`}
+    />
+  );
+}
+/* oxlint-enable jsx-a11y/prefer-tag-over-role */
+
 function TableCell({
   value,
   disabled,
   placeholder,
   onChange,
+  onPasteRows,
 }: {
   value: string;
   disabled: boolean;
   placeholder: string;
   onChange: (value: string) => void;
+  onPasteRows: (rows: WorkRow[]) => void;
 }) {
   return (
     <td className="border-r p-0">
-      <Textarea
+      <RichTextEditor
         value={value}
-        onChange={(event) => onChange(event.target.value)}
+        onChange={onChange}
         disabled={disabled}
-        placeholder={disabled ? "暂无内容" : placeholder}
-        className="min-h-[82px] resize-y rounded-none border-0 bg-transparent p-3 leading-6 shadow-none focus-visible:ring-2 disabled:cursor-default disabled:opacity-100"
+        placeholder={disabled ? '暂无内容' : placeholder}
+        compact
+        onTablePaste={onPasteRows}
       />
     </td>
   );
@@ -777,12 +1055,11 @@ function ReportSection({
         <p className="mb-3 text-xs leading-5 text-muted-foreground">
           {section.hint}
         </p>
-        <Textarea
+        <RichTextEditor
           value={value}
-          onChange={(event) => onValue(event.target.value)}
+          onChange={onValue}
           disabled={!editable}
-          placeholder={editable ? "在这里填写本周内容…" : "本栏目暂无内容"}
-          className="min-h-[132px] resize-y bg-[#fbfcfd] p-3 leading-6 disabled:cursor-default disabled:opacity-100"
+          placeholder={editable ? '在这里填写本周内容…' : '本栏目暂无内容'}
         />
         {section.canAttach && (
           <AttachmentArea
@@ -836,7 +1113,7 @@ function AttachmentArea({
             onChange={(event) => {
               const file = event.target.files?.[0];
               if (file) onUpload(file);
-              event.target.value = "";
+              event.target.value = '';
             }}
           />
         </label>
