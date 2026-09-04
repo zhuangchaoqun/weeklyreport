@@ -25,6 +25,7 @@ const translations: Record<string, string> = {
   学生: 'Student',
   管理员: 'Administrator',
   姓名: 'Name',
+  你的真实姓名: 'Your full name',
   学号: 'Student ID',
   管理员邀请码: 'Administrator invitation code',
   '请完整复制邀请码；前后空格会自动忽略':
@@ -38,7 +39,7 @@ const translations: Record<string, string> = {
   提交注册申请: 'Submit registration request',
   注册管理员并进入: 'Register administrator and continue',
   注册与使用说明: 'Registration and usage',
-  '学生注册后需由管理员批准；获批后可查看组内周报，并仅在当期周一填写自己的内容。管理员可审核账号、浏览历周记录并逐项点评。':
+  '学生注册后需由管理员批准；获批后可查看组内周报，并填写、保存自己的历周周报。管理员可审核账号、浏览历周记录并逐项点评。':
     'Student accounts require administrator approval. Approved students can view group reports and edit their own reports. Administrators can review accounts, browse archived weeks and comment on each section.',
   '附件上限 20 MB。周报、附件和点评均保存在服务器中，并随周次长期归档。':
     'Each attachment may be up to 20 MB. Reports, attachments and comments are stored on the server and archived by week.',
@@ -57,6 +58,13 @@ const translations: Record<string, string> = {
   已批准学生: 'Approved student',
   批准进入: 'Approve',
   重置密码: 'Reset password',
+  '重置为 12345678': 'Reset to 12345678',
+  编辑信息: 'Edit details',
+  修改学生信息: 'Edit student details',
+  '可修改姓名、登录邮箱和学号。修改后，该学生需要重新登录。':
+    'Update the name, sign-in email and student ID. The student will need to sign in again.',
+  学生真实姓名: "Student's full name",
+  保存学生信息: 'Save student details',
   移除申请: 'Remove request',
   移除账号: 'Remove account',
   '正在读取周报…': 'Loading weekly report…',
@@ -154,6 +162,15 @@ const translations: Record<string, string> = {
   '审批失败。': 'Approval failed.',
   '移除账号失败。': 'Unable to remove the account.',
   '密码重置失败。': 'Password reset failed.',
+  '学生信息更新失败。': 'Unable to update student details.',
+  '只能修改学生账号信息。': 'Only student account details can be edited.',
+  '学生账号必须填写学号。': 'A student account must have a student ID.',
+  '该邮箱已被其他账号使用。':
+    'That email address is already used by another account.',
+  '该学号已被其他学生使用。':
+    'That student ID is already used by another student.',
+  '只能一键重置学生密码。':
+    'One-click password reset is available only for students.',
   '请先登录。': 'Please sign in first.',
   '自然周无效。': 'Invalid calendar week.',
   '周报已提交，需由导师退回后才能修改。':
